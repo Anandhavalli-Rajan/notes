@@ -1,0 +1,352 @@
+Creating a Node.js backend for a social media application with Sequelize and MSSQL as the database requires a structured approach. Below, I’ll guide you through setting up the architecture, the essential files, and the necessary components to build a professional backend.
+
+### Project Structure
+
+We'll create a modular structure with well-defined folders for each part of the application:
+
+```
+social-media-app/
+│
+├── config/
+│   ├── config.js        # Database configuration
+│   └── sequelize.js     # Sequelize initialization
+│
+├── controllers/         # All route handlers
+│   ├── authController.js
+│   └── userController.js
+│
+├── models/              # Sequelize Models
+│   ├── user.js
+│   └── post.js
+│
+├── routes/              # All routes
+│   ├── authRoutes.js
+│   └── userRoutes.js
+│
+├── middleware/          # Middlewares (e.g. authentication, validation)
+│   └── authMiddleware.js
+│
+├── services/            # Business logic, such as email services, etc.
+│   └── authService.js
+│
+├── utils/               # Utility functions
+│   └── responseHandler.js
+│
+├── migrations/          # Sequelize migrations for DB schema changes
+│
+├── seeders/             # Sequelize seeders for initial data population
+│
+├── .env                 # Environment variables (DB credentials, JWT secret, etc.)
+├── app.js               # Main entry point
+├── server.js            # Server setup and listening
+└── package.json         # Project dependencies
+```
+
+### Step-by-Step Setup
+
+#### 1. Install Dependencies
+
+First, let's install the necessary dependencies:
+
+```bash
+mkdir social-media-app
+cd social-media-app
+npm init -y
+npm install express sequelize mssql dotenv bcryptjs jsonwebtoken cors body-parser
+npm install --save-dev nodemon
+```
+
+#### 2. Setup Environment Variables
+
+Create a `.env` file in the root of your project and configure your database credentials and other important variables.
+
+```ini
+DB_HOST=localhost
+DB_USER=your-db-username
+DB_PASSWORD=your-db-password
+DB_NAME=social_media
+JWT_SECRET=your-secret-key
+```
+
+#### 3. Database Configuration (`config/config.js`)
+
+Here’s how to configure Sequelize to connect with MSSQL:
+
+```javascript
+require('dotenv').config();
+
+module.exports = {
+  development: {
+    dialect: 'mssql',
+    host: process.env.DB_HOST,
+    username: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    define: {
+      timestamps: true,  // Add timestamps to models
+    },
+  },
+};
+```
+
+#### 4. Sequelize Setup (`config/sequelize.js`)
+
+Create a file to initialize Sequelize and sync models.
+
+```javascript
+const { Sequelize } = require('sequelize');
+const dbConfig = require('./config.js');
+
+const sequelize = new Sequelize(dbConfig.development);
+
+const authenticateDbConnection = async () => {
+  try {
+    await sequelize.authenticate();
+    console.log('Connection to the database has been established successfully.');
+  } catch (error) {
+    console.error('Unable to connect to the database:', error);
+  }
+};
+
+module.exports = {
+  sequelize,
+  authenticateDbConnection,
+};
+```
+
+#### 5. Models (`models/user.js` and `models/post.js`)
+
+Create models using Sequelize for your `User` and `Post`.
+
+**User Model (`models/user.js`)**
+
+```javascript
+const { Sequelize, DataTypes } = require('sequelize');
+const { sequelize } = require('../config/sequelize');
+
+const User = sequelize.define('User', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true,
+  },
+  username: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true,
+  },
+  email: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true,
+  },
+  password: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  bio: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+}, {
+  tableName: 'users',
+});
+
+module.exports = User;
+```
+
+**Post Model (`models/post.js`)**
+
+```javascript
+const { Sequelize, DataTypes } = require('sequelize');
+const { sequelize } = require('../config/sequelize');
+const User = require('./user');
+
+const Post = sequelize.define('Post', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true,
+  },
+  content: {
+    type: DataTypes.TEXT,
+    allowNull: false,
+  },
+  userId: {
+    type: DataTypes.INTEGER,
+    references: {
+      model: User,
+      key: 'id',
+    },
+    allowNull: false,
+  },
+}, {
+  tableName: 'posts',
+});
+
+Post.belongsTo(User, { foreignKey: 'userId' });
+
+module.exports = Post;
+```
+
+#### 6. Controllers (`controllers/authController.js`, `controllers/userController.js`)
+
+Create controllers to handle API logic.
+
+**Auth Controller (`controllers/authController.js`)**
+
+```javascript
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const User = require('../models/user');
+
+exports.register = async (req, res) => {
+  const { username, email, password } = req.body;
+
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({
+      username,
+      email,
+      password: hashedPassword,
+    });
+
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    res.status(201).json({ message: 'User created successfully', token });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+exports.login = async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const user = await User.findOne({ where: { email } });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) return res.status(400).json({ message: 'Invalid password' });
+
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    res.status(200).json({ message: 'Login successful', token });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+```
+
+**User Controller (`controllers/userController.js`)**
+
+```javascript
+const User = require('../models/user');
+
+exports.getProfile = async (req, res) => {
+  try {
+    const user = await User.findByPk(req.userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    res.status(200).json(user);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+```
+
+#### 7. Routes (`routes/authRoutes.js`, `routes/userRoutes.js`)
+
+Define routes that map to controllers.
+
+**Auth Routes (`routes/authRoutes.js`)**
+
+```javascript
+const express = require('express');
+const { register, login } = require('../controllers/authController');
+const router = express.Router();
+
+router.post('/register', register);
+router.post('/login', login);
+
+module.exports = router;
+```
+
+**User Routes (`routes/userRoutes.js`)**
+
+```javascript
+const express = require('express');
+const { getProfile } = require('../controllers/userController');
+const { verifyToken } = require('../middleware/authMiddleware');
+const router = express.Router();
+
+router.get('/profile', verifyToken, getProfile);
+
+module.exports = router;
+```
+
+#### 8. Middleware (`middleware/authMiddleware.js`)
+
+Create a middleware to validate JWT tokens.
+
+```javascript
+const jwt = require('jsonwebtoken');
+
+exports.verifyToken = (req, res, next) => {
+  const token = req.headers['authorization']?.split(' ')[1];
+
+  if (!token) return res.status(403).json({ message: 'Token required' });
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) return res.status(401).json({ message: 'Invalid or expired token' });
+
+    req.userId = decoded.userId;
+    next();
+  });
+};
+```
+
+#### 9. Main App Setup (`app.js`)
+
+Set up Express and routes.
+
+```javascript
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const authRoutes = require('./routes/authRoutes');
+const userRoutes = require('./routes/userRoutes');
+const { authenticateDbConnection } = require('./config/sequelize');
+
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
+app.use('/auth', authRoutes);
+app.use('/user', userRoutes);
+
+authenticateDbConnection();
+
+module.exports = app;
+```
+
+#### 10. Start the Server (`server.js`)
+
+Set up the server to listen.
+
+```javascript
+const app = require('./app');
+
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+```
+
+### Conclusion
+
+You now have a basic backend for a social media application with:
+
+- Authentication (register and login with JWT)
+- User profile management
+- Sequelize ORM with MSSQL database
+
+You can extend this by adding more features such as creating posts, liking posts, following users, etc., as per the requirements of your social media app.
